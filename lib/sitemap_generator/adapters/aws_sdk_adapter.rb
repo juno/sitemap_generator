@@ -44,12 +44,12 @@ module SitemapGenerator
     # Call with a SitemapLocation and string data
     def write(location, raw_data)
       SitemapGenerator::FileAdapter.new.write(location, raw_data)
-      s3_object = s3_resource.bucket(@bucket).object(location.path_in_public)
-      s3_object.upload_file(location.path, {
-        acl: @acl,
-        cache_control: @cache_control,
-        content_type: location[:compress] ? 'application/x-gzip' : 'application/xml'
-      }.compact)
+      if Gem::Version.new(Aws::S3::GEM_VERSION) >= Gem::Version.new("1.197.0")
+        write_by_s3_transfer_manager(location)
+      else
+        # Aws::S3::Object#upload_file was deprecated in aws-sdk-s3 version 1.197.0
+        write_by_s3_resource(location)
+      end
     end
 
     private
@@ -60,6 +60,26 @@ module SitemapGenerator
 
     def s3_resource
       @s3_resource ||= Aws::S3::Resource.new(@options)
+    end
+
+    def write_by_s3_resource(location)
+      s3_object = s3_resource.bucket(@bucket).object(location.path_in_public)
+      s3_object.upload_file(location.path, {
+        acl: @acl,
+        cache_control: @cache_control,
+        content_type: location[:compress] ? 'application/x-gzip' : 'application/xml'
+      }.compact)
+    end
+
+    def write_by_s3_transfer_manager(location)
+      s3_manager = Aws::S3::TransferManager.new(client: Aws::S3::Client.new(@options))
+      s3_manager.upload_file(location.path, **{
+        acl: @acl,
+        bucket: @bucket,
+        cache_control: @cache_control,
+        content_type: location[:compress] ? 'application/x-gzip' : 'application/xml',
+        key: location.path_in_public
+      }.compact)
     end
   end
 end
