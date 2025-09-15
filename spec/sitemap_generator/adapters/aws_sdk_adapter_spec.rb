@@ -9,7 +9,11 @@ RSpec.describe SitemapGenerator::AwsSdkAdapter do
   let(:options) { {} }
   let(:compress) { nil }
 
-  shared_examples 'it writes the raw data to a file and then uploads that file to S3' do |acl, cache_control, content_type|
+  shared_examples 'it writes the raw data to a file and then uploads that file to S3 via S3 Resource' do |acl, cache_control, content_type|
+    before do
+      allow(adapter).to receive(:s3_transfer_manager_available?).and_return(false)
+    end
+
     it 'writes the raw data to a file and then uploads that file to S3' do
       s3_object = double(:s3_object)
       s3_resource = double(:s3_resource)
@@ -25,6 +29,32 @@ RSpec.describe SitemapGenerator::AwsSdkAdapter do
         content_type: content_type
       )).and_return(nil)
       expect_any_instance_of(SitemapGenerator::FileAdapter).to receive(:write).with(location, 'raw_data')
+      adapter.write(location, 'raw_data')
+    end
+  end
+
+  shared_examples 'it writes the raw data to a file and then uploads that file to S3 via TransferManager' do |acl, cache_control, content_type|
+    before do
+      allow(adapter).to receive(:s3_transfer_manager_available?).and_return(true)
+    end
+
+    it 'writes the raw data to a file and then uploads that file to S3' do
+      s3_client = double(:s3_client)
+      s3_transfer_manager = double(:s3_transfer_manager)
+
+      expect(Aws::S3::Client).to receive(:new).with({}).and_return(s3_client)
+      expect(Aws::S3::TransferManager).to receive(:new).with(client: s3_client).and_return(s3_transfer_manager)
+      expect(location).to receive(:path).and_return('path')
+      expect(location).to receive(:path_in_public).and_return('path_in_public')
+      expect(s3_transfer_manager).to receive(:upload_file).with('path', hash_including(
+        acl: acl,
+        bucket: 'bucket',
+        cache_control: cache_control,
+        content_type: content_type,
+        key: 'path_in_public'
+      )).and_return(nil)
+      expect_any_instance_of(SitemapGenerator::FileAdapter).to receive(:write).with(location, 'raw_data')
+
       adapter.write(location, 'raw_data')
     end
   end
@@ -94,22 +124,44 @@ RSpec.describe SitemapGenerator::AwsSdkAdapter do
   end
 
   describe '#write' do
-    context 'with no compress option' do
-      it_behaves_like 'it writes the raw data to a file and then uploads that file to S3', 'public-read', 'private, max-age=0, no-cache', 'application/xml'
-    end
-
-    context 'with compress true' do
-      let(:compress) { true }
-
-      it_behaves_like 'it writes the raw data to a file and then uploads that file to S3', 'public-read', 'private, max-age=0, no-cache', 'application/x-gzip'
-    end
-
-    context 'with acl and cache control configured' do
-      let(:options) do
-        { acl: 'private', cache_control: 'public, max-age=3600' }
+    context 'when TransferManager is unavailable' do
+      context 'with no compress option' do
+        it_behaves_like 'it writes the raw data to a file and then uploads that file to S3 via S3 Resource', 'public-read', 'private, max-age=0, no-cache', 'application/xml'
       end
 
-      it_behaves_like 'it writes the raw data to a file and then uploads that file to S3', 'private', 'public, max-age=3600', 'application/xml'
+      context 'with compress true' do
+        let(:compress) { true }
+
+        it_behaves_like 'it writes the raw data to a file and then uploads that file to S3 via S3 Resource', 'public-read', 'private, max-age=0, no-cache', 'application/x-gzip'
+      end
+
+      context 'with acl and cache control configured' do
+        let(:options) do
+          { acl: 'private', cache_control: 'public, max-age=3600' }
+        end
+
+        it_behaves_like 'it writes the raw data to a file and then uploads that file to S3 via S3 Resource', 'private', 'public, max-age=3600', 'application/xml'
+      end
+    end
+
+    context 'when TransferManager is available' do
+      context 'with no compress option' do
+        it_behaves_like 'it writes the raw data to a file and then uploads that file to S3 via TransferManager', 'public-read', 'private, max-age=0, no-cache', 'application/xml'
+      end
+
+      context 'with compress true' do
+        let(:compress) { true }
+
+        it_behaves_like 'it writes the raw data to a file and then uploads that file to S3 via TransferManager', 'public-read', 'private, max-age=0, no-cache', 'application/x-gzip'
+      end
+
+      context 'with acl and cache control configured' do
+        let(:options) do
+          { acl: 'private', cache_control: 'public, max-age=3600' }
+        end
+
+        it_behaves_like 'it writes the raw data to a file and then uploads that file to S3 via TransferManager', 'private', 'public, max-age=3600', 'application/xml'
+      end
     end
   end
 

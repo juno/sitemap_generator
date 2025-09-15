@@ -12,7 +12,8 @@ module SitemapGenerator
     # the AWS SDK will auto-detect your credentials and region, but you can use
     # the options to configure them manually.
     #
-    # Requires Aws::S3::Resource and Aws::Credentials to be defined.
+    # Uploads use Aws::S3::TransferManager when available; otherwise they
+    # fall back to Aws::S3::Resource#upload_file.
     #
     # @param bucket [String] Name of the S3 bucket
     # @param options [Hash] Options passed directly to AWS to control the Resource created.  See Options below.
@@ -41,15 +42,15 @@ module SitemapGenerator
       set_option_unless_set(:endpoint, aws_endpoint)
     end
 
-    # Call with a SitemapLocation and string data
+    # Writes raw sitemap data to a local file, then uploads it to S3.
+    # Uses TransferManager when available, otherwise falls back to S3 Resource.
     def write(location, raw_data)
       SitemapGenerator::FileAdapter.new.write(location, raw_data)
-      s3_object = s3_resource.bucket(@bucket).object(location.path_in_public)
-      s3_object.upload_file(location.path, {
-        acl: @acl,
-        cache_control: @cache_control,
-        content_type: location[:compress] ? 'application/x-gzip' : 'application/xml'
-      }.compact)
+      if s3_transfer_manager_available?
+        write_by_s3_transfer_manager(location)
+      else
+        write_by_s3_resource(location)
+      end
     end
 
     private
@@ -60,6 +61,30 @@ module SitemapGenerator
 
     def s3_resource
       @s3_resource ||= Aws::S3::Resource.new(@options)
+    end
+
+    def s3_transfer_manager_available?
+      defined?(Aws::S3::TransferManager)
+    end
+
+    def write_by_s3_resource(location)
+      s3_object = s3_resource.bucket(@bucket).object(location.path_in_public)
+      s3_object.upload_file(location.path, {
+        acl: @acl,
+        cache_control: @cache_control,
+        content_type: location[:compress] ? 'application/x-gzip' : 'application/xml'
+      }.compact)
+    end
+
+    def write_by_s3_transfer_manager(location)
+      s3_manager = Aws::S3::TransferManager.new(client: Aws::S3::Client.new(@options))
+      s3_manager.upload_file(location.path, **{
+        acl: @acl,
+        bucket: @bucket,
+        cache_control: @cache_control,
+        content_type: location[:compress] ? 'application/x-gzip' : 'application/xml',
+        key: location.path_in_public
+      }.compact)
     end
   end
 end
